@@ -43,20 +43,18 @@ class TNESample:
         # Additional meta-data
         self.metadata = None
 
-    def get_spans_range(self, device_type: Optional[str] = "cuda") -> torch.Tensor:
+    def get_spans_range(self, batch_idx) -> torch.Tensor:
         """
             DESCRIPTION: The method returns the end points/range of the spans of the sample/document.
-            The information is returns as tensor of size [ SPANS_QUANTITY x 2 ]
+            The information is returns as tensor of size [ SPANS_QUANTITY x 3 ]
             such that each row contains the end points of a span in the document.
             ARGUMENTS:
               - device_type: type of device
         """
-        if self.spans_range is None:
-            spans_range = torch.zeros(self.spans_quantity, 2, dtype=torch.long, device=device_type)
-            for i, span in enumerate(self.spans.values()):
-                spans_range[i] = span.end_position
-            self.spans_range = spans_range
-        return self.spans_range
+        spans_range = torch.zeros(self.spans_quantity, 3, dtype=torch.long)
+        for i, span in enumerate(self.spans.values()):
+            spans_range[i] = span.get_end_points(batch_idx)
+        return spans_range
 
     def __str__(self) -> str:
         """

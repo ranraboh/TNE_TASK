@@ -5,7 +5,7 @@ from model.modules.activation_function import get_activation_module
 
 
 class Multilayer_Classifier(tnn.Module):
-    def __init__(self, mlp_config: Dict[str, Any], device_type: Optional[str] = "cuda") -> None:
+    def __init__(self, mlp_config: Dict[str, Any], output_probs: bool, device_type: Optional[str] = "cuda") -> None:
         """
             DESCRIPTION: the method init an mlp module according to the given configuration.
             Mlp module is multi-layer feedforward artificial neural network that generates
@@ -25,6 +25,7 @@ class Multilayer_Classifier(tnn.Module):
         """
         super(Multilayer_Classifier, self).__init__()
         self.device_type = device_type
+        self.output_probs = output_probs
 
         ######################################
         #     Training hyper-parameters      #
@@ -53,14 +54,21 @@ class Multilayer_Classifier(tnn.Module):
         # Init linear fully connected layers
         self.linear_layers = []
         for i in range(0, self.nof_layers):
-            self.linear_layers.append(
-                tnn.Linear(self.layers_dims[i], self.layers_dims[i + 1], bias=True, device=self.device_type))
+            linear_layer = tnn.Linear(self.layers_dims[i], self.layers_dims[i + 1], bias=True, device=self.device_type)
+            torch.nn.init.xavier_uniform_(linear_layer.weight)
+            self.linear_layers.append(linear_layer)
 
         # Init batch normalization
         if self.batch_norm:
             self.bc_layer = tnn.BatchNorm1d(num_features=self.hidden_size)
         else:
             self.bc_layer = lambda x: x
+
+        # Init Softmax
+        if self.output_probs:
+            self.softmax = tnn.LogSoftmax(dim=-1)
+        else:
+            self.softmax = lambda x: x
 
         # Init activation function
         self.activation_function = get_activation_module(self.activation)()
@@ -85,7 +93,6 @@ class Multilayer_Classifier(tnn.Module):
             h = self.dropout(self.activation_function(z))
 
         # Output layer
-        output = self.linear_layers[self.nof_layers - 1](h)
-
-        # softmax (?)
+        z = self.linear_layers[self.nof_layers - 1](h)
+        output = self.softmax(z)
         return output

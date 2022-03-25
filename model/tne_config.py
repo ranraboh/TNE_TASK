@@ -24,7 +24,7 @@ class TNE_Config:
 
         # Prepositions List - list of the possible prepositions that can be the relation
         # between an anchor noun phrase to complement span.
-        self.prepositions_list = ['no-relation', 'of', 'against', 'in', 'by', 'on', 'about', 'with', 'after', 'member(s) of',
+        self.prepositions_list = ['no-relation', 'self', 'of', 'against', 'in', 'by', 'on', 'about', 'with', 'after', 'member(s) of',
                             'to', 'from', 'for', 'among', 'under', 'at', 'between', 'during', 'near', 'over', 'before',
                             'inside', 'outside', 'into', 'around']
         self.num_labels = len(self.prepositions_list)

@@ -1,5 +1,5 @@
 from typing import Tuple
-
+import torch
 
 class SpanField:
     """
@@ -21,13 +21,13 @@ class SpanField:
         # Adding 1 to the end tokens to account for the non-including nature of index selection
         self.end_position = end_position + 1
 
-    def end_points(self) -> Tuple:
+    def get_end_points(self, batch_idx=-1) -> torch.Tensor:
         """
             DESCRIPTION: The method returns a tuple which describes the end points of the span.
             RETURNS: (tuple) The method returns a tuple which contains two entries
             such that the first entry is the start position and the second entry is the end position.
         """
-        return self.start_position, self.end_position
+        return torch.LongTensor([batch_idx, self.start_position, self.end_position])
 
     def __str__(self) -> str:
         """

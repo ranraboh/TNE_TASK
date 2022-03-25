@@ -45,3 +45,8 @@ class TNEBatch:
         """
         return "Tokens: " + str(self.tokens) + "\t Spans:" + str(self.spans) + "\t Links:" + str(
             self.links) + "\t Prepositions Relations: " + str(self.preposition_labels)
+    
+    def to(self, device_type: str) -> None:
+      self.tokens = self.tokens.to(device_type)
+      self.spans = self.spans.to(device_type)
+      self.preposition_labels = self.preposition_labels.to(device_type)

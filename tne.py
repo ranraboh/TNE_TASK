@@ -3,13 +3,16 @@ from model.model_parameters import Model_Parameters
 from model.tne_config import TNE_Config
 from model.tne_model import TNEModel
 from trainer.tne_trainer import TNETrainer
+import torch
 
 ###############################################
 #                Load Dataset                 #
 ###############################################
 
+torch.cuda.empty_cache()
 tne_config = TNE_Config()
-data_reader = DataReader(prepositions_list=tne_config.prepositions_list, device_type=tne_config.device)
+data_reader = DataReader(prepositions_list=tne_config.prepositions_list)
+train_set = data_reader.load_samples(tne_config.train_set)
 evaluation_set = data_reader.load_samples(tne_config.evaluation_set)
 # create train set as well.
 
@@ -19,7 +22,7 @@ evaluation_set = data_reader.load_samples(tne_config.evaluation_set)
 
 hyper_parameters = Model_Parameters(tne_config.num_labels)
 model = TNEModel(hyper_parameters=hyper_parameters, device_type=tne_config.device)
-trainer = TNETrainer(model=model, train_set=evaluation_set, evaluation_set=evaluation_set, test_set=evaluation_set, 
+trainer = TNETrainer(model=model, train_set=train_set, evaluation_set=evaluation_set, test_set=evaluation_set,
                      config=tne_config, hyper_parameters=hyper_parameters)
 
 # Train the model
@@ -27,6 +30,3 @@ trainer.train()
 
 # Evaluation step
 trainer.evaluate()
-
-# Save params/weights/model/components
-

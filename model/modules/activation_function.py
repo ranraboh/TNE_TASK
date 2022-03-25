@@ -14,7 +14,9 @@ class Activation_Function(Enum):
 # Map activation function enum to the corresponding activation layer
 activation_module = {
     Activation_Function.ReLU: torch.nn.ReLU,
-    Activation_Function.TANH: torch.nn.Tanh
+    Activation_Function.TANH: torch.nn.Tanh,
+    Activation_Function.PReLU: torch.nn.PReLU,
+    Activation_Function.LeakyReLU: torch.nn.LeakyReLU
 }
 
 

@@ -10,15 +10,16 @@ from data_manager.entity_classes.tne_sample import TNESample
 
 
 class DataReader:
-    def __init__(self, prepositions_list: List[str], device_type: Optional[str] = "cuda") -> None:
+    def __init__(self, prepositions_list: List[str]) -> None:
         """
             DESCRIPTION: The method init a data reader object        """
-        # Device type (options: cuda, cpu)
-        self.device_type = device_type
-
         # Map between a preposition name to corresponding index
         self.prepositions_counter = len(prepositions_list)
         self.prepositions_dict = {k: v for v, k in enumerate(prepositions_list)}
+
+        #
+        self.no_relation = 0
+        self.self_relation = 1
 
     def load_samples(self, data_path: str) -> Dataset:
         """
@@ -57,13 +58,11 @@ class DataReader:
 
         # Extract noun phrase information and build list of all the spans in the text/document.
         spans = {}
-        spans_range = []
         np_entities = sample['nps']
         for np_id, np_record in np_entities.items():
             first_token_idx = np_record['first_token']
             last_token_idx = np_record['last_token']
             spans[np_id] = SpanField(id=np_id, start_position=first_token_idx, end_position=last_token_idx)  # document id ?
-            spans_range.append(spans[np_id].end_points())
 
         # Build mapping between an anchor and complement noun phrases to
         # the preposition-relation between them.
@@ -85,13 +84,13 @@ class DataReader:
 
         #
         nof_spans = len(np_entities)
-        links_vec = torch.zeros(nof_spans, nof_spans, dtype=torch.long, device=self.device_type)
+        links_vec = torch.zeros(nof_spans, nof_spans, dtype=torch.long, device="cpu")
         preposition_labels = []
         for i in range(0, nof_spans):
             for j in range(0, nof_spans):
                 if i == j:
-                    links_vec[i][j] = -1
-                    preposition_labels.append(0)
+                    links_vec[i][j] = self.no_relation
+                    preposition_labels.append(self.self_relation)
                     continue
                 ith_span = "np" + str(i)
                 jth_span = "np" + str(j)
@@ -99,8 +98,8 @@ class DataReader:
                     preposition_labels.append(prepositions_relations[ith_span][jth_span])
                     links_vec[i][j] = 1
                 else:
-                    preposition_labels.append(0)  # NO RELATION (doit)
+                    preposition_labels.append(self.no_relation)
 
-        preposition_labels = torch.LongTensor(preposition_labels).to(self.device_type)
+        preposition_labels = torch.LongTensor(preposition_labels, device="cpu")
         return TNESample(id=sample['id'], tokens=tokens, spans=spans, links=links_vec,
-                         prepositions_labels=preposition_labels)  # id change
+                         prepositions_labels=preposition_labels)

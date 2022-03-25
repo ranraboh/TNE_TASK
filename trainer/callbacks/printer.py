@@ -19,6 +19,7 @@ class PrinterCallback(TrainerCallback):
     # the graph display the evaluation accuracy of the model for
     # for each epoch along the training process.
     def on_train_end(self, args, state, control, **kwargs):
+        print ("Training end")
         log_data = state.log_history
 
         # Assign y axis values (epochs eval accuracy)
