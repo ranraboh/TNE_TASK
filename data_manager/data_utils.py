@@ -2,7 +2,6 @@ from typing import Dict, List, Any
 import json
 import gzip
 
-
 def read_data(file_path: str) -> List[Dict[str, Any]]:
     """
     DESCRIPTION: The method receives a path of a data file.

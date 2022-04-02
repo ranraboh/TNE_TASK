@@ -21,6 +21,10 @@ class SpanField:
         # Adding 1 to the end tokens to account for the non-including nature of index selection
         self.end_position = end_position + 1
 
+    def adjust_end_points(self, start_poistion, end_position):
+        self.start_position = start_poistion
+        self.end_position = end_position
+
     def get_end_points(self, batch_idx=-1) -> torch.Tensor:
         """
             DESCRIPTION: The method returns a tuple which describes the end points of the span.

@@ -1,4 +1,3 @@
-from transformers import AutoModel
 from transformers import BertTokenizer, BertForMaskedLM, BertConfig
 
 from data_manager.entity_classes.tne_batch import TNEBatch
@@ -8,7 +7,6 @@ from model.model_parameters import Model_Parameters
 from torch.nn.utils.rnn import pad_sequence
 from typing import Optional
 import torch
-
 from model.time_distributed import TimeDistributed
 
 
@@ -37,28 +35,39 @@ class TNEModel(torch.nn.Module):
         context_config = BertConfig.from_pretrained(context_layer_config["model"], output_hidden_states=True)
         self.context_layer = BertForMaskedLM.from_pretrained(context_layer_config["model"], config=context_config)
 
+        # Encoder Layer
+        encoder_layer = torch.nn.TransformerEncoderLayer(d_model=768, nhead=12)
+        self.encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=6)
+        self.dropout = torch.nn.Dropout(p=0.2)
+
         # Anchor mlp used to encode each span as as an anchor,
         # It would represent each span and include the crucial information to help him
         # predict whether the anchor is connected to different component spans
-        self.anchor_encoder = TimeDistributed(Multilayer_Classifier(mlp_config=anchor_mlp_config, output_probs=False), batch_first=True)
+        self.anchor_encoder = Multilayer_Classifier(mlp_config=anchor_mlp_config, output_probs=False)
 
         # Complement mlp used to encode each span as as complement,
         # used to represent each span and include crucial information to help him
         # predict whether the anchor is connected to given complement span
-        self.complement_encoder = TimeDistributed(Multilayer_Classifier(mlp_config=complement_mlp_config, output_probs=False), batch_first=True)
+        self.complement_encoder = Multilayer_Classifier(mlp_config=complement_mlp_config, output_probs=False)
 
         # Prediction model is a multiclass classification which receives a
         # concatenated representation for each pair of anchor and complement.
         # and predict the connecting preposition or None is case the NPs are not connected
-        self.prediction_model = TimeDistributed(Multilayer_Classifier(mlp_config=prediction_model_config, output_probs=True), batch_first=True)
+        self.prediction_model = Multilayer_Classifier(mlp_config=prediction_model_config, output_probs=True)
 
         #####################################
         #           Loss Function           #
         #####################################
 
         # Loss function which evaluates the model performance.
-        self.loss = get_loss_module(training_parameters['loss'])()
-
+        self.classes = torch.zeros(26, dtype=torch.long)
+        print ("*** Weights 1/10 and bads (10) - metrics update - add classes -")
+        bad = [9, 14, 15, 18, 20, 21, 22, 23, 24, 25]
+        class_weights = torch.ones(26)
+        class_weights[0] = class_weights[0] / 10
+        class_weights[bad] *= 3
+        print (class_weights)
+        self.loss = get_loss_module(training_parameters['loss'])(weight=class_weights)
         self.optimization_steps = 0
 
 
@@ -81,14 +90,15 @@ class TNEModel(torch.nn.Module):
           - input (TNEBatch): batch of samples from the dataset.
           - eval_model (Optional[bool]): training mode or evaluation mode.
         """
+        input.to(self.device_type)
         self.optimization_steps = self.optimization_steps + 1
+
         # The input for the context layer is the tokens for the documents in batch.
         # The tokenized_input is composed of two main components:
         # input_ids: The ids of the tokens
         # attention mask: binary sequence which indicate the position of the padded
         # indices so that the model does not attend to them.
         # dim: [ BATCH_SIZE x NOF_TOKENS ]
-        input.to(self.device_type)
         tokenized_input = input.tokens
 
         # Apply context model on the tokens to encode the tokens in the documents in the
@@ -103,6 +113,7 @@ class TNEModel(torch.nn.Module):
         # the inner tokens representations.
         # output dim: [ BATCH_SIZE x SEQ_LEN x FEATURES_DIM ]
         tokens_embeddings = context_output[1][-1] # last hidden state
+        tokens_embeddings = self.encoder(self.dropout(tokens_embeddings))
 
         # For each NP span, accessing the relevant span sum from the representations
         # span_embeddings dim:  [ BATCH_SIZE x NOF_SPANS x 2 * FEATURES_DIM ]
@@ -115,14 +126,14 @@ class TNEModel(torch.nn.Module):
 
         # Feed each span into the complement encoder/mlp to gain representations for the spans as complements
         # complement_reps dim = [ BATCH_SIZE x NOF_SPANS x COMPLEMENT_REP ]
-        #complement_reps = self.complement_encoder(span_embeddings)
+        complement_reps = self.complement_encoder(span_embeddings)
 
         # Creating a large matrix that concatenates all permutations of anchor with complement
         # permutations_mat dim : [ BATCH_SIZE x NOF_SPANS x NOF_SPANS x ANCHOR_REP + COMPLEMENT_REP ]
         # permutations_spans dim : [ NOF_SPANS * NOF_SPANS x ANCHOR_REP + COMPLEMENT_REP ]
         batch_size, nof_spans, features_dim = anchor_reps.shape
         permutations_mat = torch.cat([anchor_reps.repeat(1, nof_spans, 1),
-                                      anchor_reps.repeat(1, 1, nof_spans).view(batch_size, -1, features_dim)], dim=-1)
+                                      complement_reps.repeat(1, 1, nof_spans).view(batch_size, -1, features_dim)], dim=-1)
         permutations_spans = permutations_mat.view(-1, 2 * features_dim)
 
         # Invoke prediction model
@@ -130,13 +141,18 @@ class TNEModel(torch.nn.Module):
         # predicted_labels dim: [  NOF_SPANS * NOF_SPANS x NUM_LABELS ]
         # such that the number of labels is the number of valid prepositions
         predicted_labels = self.prediction_model(permutations_spans).squeeze(0)
+        predictions = predicted_labels.argmax(dim=-1)
+        for label in predictions:
+            self.classes[label] = self.classes[label] + 1
 
-        if self.optimization_steps % 100 == 0:
-            print ("--predicted-- (5)")
-            print (predicted_labels)
+        if self.optimization_steps % 400 == 0:
+            print("--predicted--")
             print (predicted_labels.argmax(dim=-1))
             print ("--labels--")
             print (labels)
+            print ("--classes--")
+            print (self.classes)
+            self.classes = torch.zeros(26, dtype=torch.long)
 
         # Compute loss value which gains the probabilities
         loss = self.loss(predicted_labels, input.preposition_labels)

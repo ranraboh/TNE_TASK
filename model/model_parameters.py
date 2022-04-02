@@ -9,20 +9,19 @@ class Model_Parameters:
         self.num_labels = num_labels
 
         self.training_params = {
-            'epochs': 20,
-            'batch_size': 4,
-            'learning_rate': 1e-4,
+            'epochs': 10,
+            'batch_size': 1,
+            'learning_rate': 1e-5,
             'weight_decay': 0.01,
             'optimizer': Optimizer.AdamW,
             "loss": Loss_Function.Cross_Entropy,
-
             # Number of warmup steps for learning rate scheduler
-            'warmup_steps': 50
+            'warmup_steps': 100
         }
 
         self.evaluation_params = {
-            'batch_size': 8,
-            'eval_steps': 250
+            'batch_size': 1,
+            'eval_steps': 500
         }
 
         # Configuration for the context layer which used to gain contextualized representation
@@ -33,12 +32,18 @@ class Model_Parameters:
             'tokenizer': 'SpanBERT/spanbert-base-cased'
         }
 
+        self.encoder_layer = {
+            'num_encoder_layers': 12,
+            'heads': 8,
+            'dropout': 0.1,
+        }
+
         # Config for anchor mlp which used to encode each span as an anchor
         self.anchor_mlp = {
             'num_layers': 1,
             'layers_dims': [1536, 500],
-            'activation_function': Activation_Function.ReLU,
-            'dropout_rate': 0.3,
+            'activation_function': Activation_Function.PReLU,
+            'dropout_rate': 0.1,
             'batch_norm': False
         }
 
@@ -46,16 +51,16 @@ class Model_Parameters:
         self.complement_mlp = {
             'num_layers': 1,
             'layers_dims': [1536, 500],
-            'activation_function': Activation_Function.ReLU,
-            'dropout_rate': 0.3,
+            'activation_function': Activation_Function.PReLU,
+            'dropout_rate': 0.1,
             'batch_norm': False
         }
 
         # Config for the prediction model which
         self.prediction_model = {
             "num_layers": 2,
-            "layers_dims": [1000, 100, num_labels],
-            "activation_function": Activation_Function.ReLU,
-            "dropout_rate": 0.3,
+            "layers_dims": [1000, 500, num_labels],
+            "activation_function": Activation_Function.PReLU,
+            "dropout_rate": 0.1,
             "batch_norm": False
         }

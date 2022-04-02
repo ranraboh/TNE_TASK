@@ -2,7 +2,6 @@ from typing import List, Optional
 from data_manager.entity_classes.span_field import SpanField
 import torch
 
-
 class TNESample:
     def __init__(self, id: str, tokens: List[str], spans: List[SpanField], links: torch.Tensor, prepositions_labels: torch.Tensor) -> None:
         """
@@ -55,6 +54,23 @@ class TNESample:
         for i, span in enumerate(self.spans.values()):
             spans_range[i] = span.get_end_points(batch_idx)
         return spans_range
+
+    def adjust_spans(self, tokenizer):
+        #print ("tokens", self.tokens)
+        #for i, span in enumerate(self.spans.values()):
+        #    print(span, span.start_position, span.end_position)
+        subwords_tokens = torch.zeros(len(self.tokens) + 1, dtype=torch.long)
+        subwords_tokens[0] = 1
+        for id, word in enumerate(self.tokens):
+            subword_count = len(tokenizer([word])['input_ids'][0]) - 2
+            subwords_tokens[id + 1] = subword_count
+        subwords_tokens = torch.cumsum(subwords_tokens, dim=0)
+        for i, span in enumerate(self.spans.values()):
+            span.adjust_end_points(subwords_tokens[span.start_position], subwords_tokens[span.end_position])
+        #print ("--------------------------------------------------------")
+        #for i, span in enumerate(self.spans.values()):
+        #    print(span, span.start_position, span.end_position)
+        #print ("subword", subwords_tokens)
 
     def __str__(self) -> str:
         """

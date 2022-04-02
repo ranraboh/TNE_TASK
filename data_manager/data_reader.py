@@ -5,9 +5,10 @@ from data_manager.data_utils import read_data
 from data_manager.data_access import DataAccess
 import torch
 
+from transformers import AutoTokenizer
 from data_manager.entity_classes.span_field import SpanField
 from data_manager.entity_classes.tne_sample import TNESample
-
+import sys
 
 class DataReader:
     def __init__(self, prepositions_list: List[str]) -> None:
@@ -16,6 +17,9 @@ class DataReader:
         # Map between a preposition name to corresponding index
         self.prepositions_counter = len(prepositions_list)
         self.prepositions_dict = {k: v for v, k in enumerate(prepositions_list)}
+        self.tokenizer = AutoTokenizer.from_pretrained('SpanBERT/spanbert-base-cased')
+        self.classes = torch.zeros(26, dtype=torch.long)
+
 
         #
         self.no_relation = 0
@@ -91,15 +95,20 @@ class DataReader:
                 if i == j:
                     links_vec[i][j] = self.no_relation
                     preposition_labels.append(self.self_relation)
+                    self.classes[self.self_relation] += 1
                     continue
                 ith_span = "np" + str(i)
                 jth_span = "np" + str(j)
                 if ith_span in prepositions_relations and jth_span in prepositions_relations[ith_span]:
                     preposition_labels.append(prepositions_relations[ith_span][jth_span])
+                    self.classes[prepositions_relations[ith_span][jth_span]] += 1
                     links_vec[i][j] = 1
                 else:
                     preposition_labels.append(self.no_relation)
+                    self.classes[self.no_relation] += 1
 
         preposition_labels = torch.LongTensor(preposition_labels, device="cpu")
-        return TNESample(id=sample['id'], tokens=tokens, spans=spans, links=links_vec,
+        sample = TNESample(id=sample['id'], tokens=tokens, spans=spans, links=links_vec,
                          prepositions_labels=preposition_labels)
+        sample.adjust_spans(self.tokenizer)
+        return sample
