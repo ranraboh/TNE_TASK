@@ -33,7 +33,7 @@ class Model_Parameters:
         # hyper parameters that are related to the evaluation stage
         self.evaluation_params = {
             'batch_size': 1,
-            'eval_steps': 10
+            'eval_steps': 1000
         }
 
         # Configuration for the context layer which used to gain contextualized representation
