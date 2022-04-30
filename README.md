@@ -6,8 +6,8 @@ an end-to-end architecture for evaluating the relation between NP span pairs. \
 The model architecture incorporates effective novel techniques ranging from graph neural networks \
 to a span encoding strategy which effectively captures information about the spans in the document.
 
-#### Paper:   
-#### Tne task website:
+#### Paper:   https://github.com/ranraboh/TNE_TASK/tree/main/paper
+#### Tne task website:  https://yanaiela.github.io/TNE/
 
 Ran Raboh \
 NLP course \
