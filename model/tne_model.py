@@ -1,20 +1,23 @@
-from transformers import BertTokenizer, BertForMaskedLM, BertConfig
-
+from transformers import RobertaConfig, RobertaForMaskedLM
 from data_manager.entity_classes.tne_batch import TNEBatch
-from model.mlp_module import Multilayer_Classifier
-from model.modules.loss_module import get_loss_module
+from model.graph_modules.dynamic_graph import DynamicGraphModule
+from model.graph_modules.graph_convolution import GraphConvolution
+from model.hierarchical_encoder import HierarchicalEncoder
+from model.modules.mlp_module import Multilayer_Classifier
+from model.enums.loss_module import get_loss_module
 from model.model_parameters import Model_Parameters
-from torch.nn.utils.rnn import pad_sequence
 from typing import Optional
 import torch
-from model.time_distributed import TimeDistributed
-
+from trainer.metrics import MetricsEvaluation
+import random
 
 class TNEModel(torch.nn.Module):
-    def __init__(self, hyper_parameters: Model_Parameters, device_type: Optional[str] = "cuda") -> None:
+    def __init__(self, config, hyper_parameters: Model_Parameters, device_type: Optional[str] = "cuda") -> None:
         """ Init TNE model components and configuration """
         super(TNEModel, self).__init__()
         self.device_type = device_type
+        self.optimization_steps = 0
+        self.tne_config = config
 
         #####################################
         #       Training Parameters         #
@@ -25,6 +28,12 @@ class TNEModel(torch.nn.Module):
         anchor_mlp_config = hyper_parameters.anchor_mlp
         complement_mlp_config = hyper_parameters.anchor_mlp
         prediction_model_config = hyper_parameters.prediction_model
+        encoder_layer_config = hyper_parameters.encoder_layer
+        graph_convolution_config = hyper_parameters.graph_convolution
+        dynamic_graph_net_config = hyper_parameters.dynamic_graph_convolution
+        distance_embeddings_config = hyper_parameters.distance_embedding_layer
+        self.concrete_labels_rate = training_parameters['concrete_labels_rate']
+        self.max_spans_distance = distance_embeddings_config['max_distance']
 
         #####################################
         #         Model Components          #
@@ -32,13 +41,26 @@ class TNEModel(torch.nn.Module):
 
         # Context layer which used to gain contextualized representation
         # of each token in the text.
-        context_config = BertConfig.from_pretrained(context_layer_config["model"], output_hidden_states=True)
-        self.context_layer = BertForMaskedLM.from_pretrained(context_layer_config["model"], config=context_config)
+        context_config = RobertaConfig.from_pretrained(context_layer_config["model"], output_hidden_states=True)
+        self.context_layer = RobertaForMaskedLM.from_pretrained(context_layer_config["model"], config=context_config)
+        self.context_layer.resize_token_embeddings(context_config.vocab_size + 2)
 
-        # Encoder Layer
-        encoder_layer = torch.nn.TransformerEncoderLayer(d_model=768, nhead=12)
-        self.encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=6)
-        self.dropout = torch.nn.Dropout(p=0.2)
+        # Embedding for the relative distance between NP pairs.
+        # The embedded distance is inject into the model before the output layer which produces the probabilities.
+        self.distance_embeddings = torch.nn.Embedding(num_embeddings=distance_embeddings_config['embedding_size'], embedding_dim=distance_embeddings_config['embedding_dim'])
+
+        # The module hierarchically refines the encoding of the tokens to gain a better representation.
+        # and extract representation for each span in the document.
+        self.hierarchical_encoder = HierarchicalEncoder(config=encoder_layer_config)
+
+        # graph neural network which used to leverage the information regarding the co-reference cluster
+        # and encode them into the model.
+        # The graph neural network produces a representation for the spans that is mindful of the co-reference clusters
+        self.graph_convolution = GraphConvolution(config=graph_convolution_config)
+
+        # The dynamic graph neural network components is used share infromation between the spans.
+        # The graph neural network learns the connections which map out the way the information is conveyed between the spans.
+        self.dynamic_graph_convolution = DynamicGraphModule(config=dynamic_graph_net_config)
 
         # Anchor mlp used to encode each span as as an anchor,
         # It would represent each span and include the crucial information to help him
@@ -50,7 +72,7 @@ class TNEModel(torch.nn.Module):
         # predict whether the anchor is connected to given complement span
         self.complement_encoder = Multilayer_Classifier(mlp_config=complement_mlp_config, output_probs=False)
 
-        # Prediction model is a multiclass classification which receives a
+        # Prediction model is ad multiclass classification which receives a
         # concatenated representation for each pair of anchor and complement.
         # and predict the connecting preposition or None is case the NPs are not connected
         self.prediction_model = Multilayer_Classifier(mlp_config=prediction_model_config, output_probs=True)
@@ -59,30 +81,27 @@ class TNEModel(torch.nn.Module):
         #           Loss Function           #
         #####################################
 
+        # Assign weights for the classes for the loss function.
+        # Used to tackle the problem for imbalanced dataset.
+        class_weights = torch.ones(hyper_parameters.num_labels)
+        class_weights[hyper_parameters.dominant_labels] *= training_parameters['dominant_class_weight']
+        class_weights[hyper_parameters.low_frequency_labels] *= training_parameters['low_frequency_weight']
+        class_weights[hyper_parameters.mid_frequency_labels] *= training_parameters['mid_frequency_weight']
+
         # Loss function which evaluates the model performance.
-        self.classes = torch.zeros(26, dtype=torch.long)
-        print ("*** Weights 1/10 and bads (10) - metrics update - add classes -")
-        bad = [9, 14, 15, 18, 20, 21, 22, 23, 24, 25]
-        class_weights = torch.ones(26)
-        class_weights[0] = class_weights[0] / 10
-        class_weights[bad] *= 3
-        print (class_weights)
         self.loss = get_loss_module(training_parameters['loss'])(weight=class_weights)
-        self.optimization_steps = 0
+        self.metrics_evaluation  = MetricsEvaluation(self.tne_config)
 
-
-    def forward(self, input: TNEBatch, labels, eval_mode: Optional[bool] = False):
+    def forward(self, input: TNEBatch, labels):
         """
         DESCRIPTION: Forward pass
-        the calculation process which used to get for each pair of noun
-        phrases, probabilities over the prepositions.
-        That is, for each ordered pair of non-pronominal base-NP spans in the text (x, y)
-        compute the probability that there is a preposition-mediated relation between them.
-        and the probability of each preposition to be the connection preposition between them.
-
-        STEPS: The first step is to get the contextualized representation of each span.
-        The model take the encoding of each pair of NPs - an anchor and complement.
-        concatenate their vectors and feed it into a prediction model.
+        the calculation process which used to get for each pair of noun phrases, probabilities over the prepositions list.
+        STEPS: The first step is to get the contextualized representation of each span using pre-trained model.
+        After obtaining contextual embeddings of the tokens, the data is passed into the span extractor encoder.
+        which output a representation for the spans.
+        The graph-based methods is used to extract further information which adds up to the initial encoding of the spans
+        to get a richer representation. The model take the encoding of each pair of NPs - an anchor and complement.
+        concatenate their vectors along with their relative distance and feed it into a prediction model.
         The prediction model is a multi-class classifier over the prepositions (or NONE in case the NPs are not connected).
         For each ordered pair of NPs, the model computes the probabilities over aforementioned classes
 
@@ -91,7 +110,8 @@ class TNEModel(torch.nn.Module):
           - eval_model (Optional[bool]): training mode or evaluation mode.
         """
         input.to(self.device_type)
-        self.optimization_steps = self.optimization_steps + 1
+        if self.training:
+            self.optimization_steps = self.optimization_steps + 1
 
         # The input for the context layer is the tokens for the documents in batch.
         # The tokenized_input is composed of two main components:
@@ -106,57 +126,80 @@ class TNEModel(torch.nn.Module):
         # output dim: [ BATCH_SIZE x SEQ_LEN x FEATURES_DIM ]
         context_output = self.context_layer(input_ids=tokenized_input['input_ids'],
                                             attention_mask=tokenized_input['attention_mask'])
-        batch_size, seq_len, features_dim = context_output[0].shape
 
         # Compute sum for every span combination in order to gain
         # contextualized representation for the spans (=noun phrases) by sum up
         # the inner tokens representations.
         # output dim: [ BATCH_SIZE x SEQ_LEN x FEATURES_DIM ]
         tokens_embeddings = context_output[1][-1] # last hidden state
-        tokens_embeddings = self.encoder(self.dropout(tokens_embeddings))
 
-        # For each NP span, accessing the relevant span sum from the representations
-        # span_embeddings dim:  [ BATCH_SIZE x NOF_SPANS x 2 * FEATURES_DIM ]
-        span_embeddings = [ pad_sequence([ torch.concat((tokens_embeddings[span[0], span[1]], tokens_embeddings[span[0], span[2]])) for span in batch_spans ]).T for batch_spans in input.spans ]
-        span_embeddings = pad_sequence(span_embeddings).transpose(0, 1)
+        # Span extractor encoder that hierarchically refines the encoding of the tokens to gain a better representation
+        # and extract representation for the spans.
+        # span_embeddings dim:  [ BATCH_SIZE x NOF_SPANS x INITIAL_SPAN_DIM ]
+        span_embeddings = self.hierarchical_encoder(tokens_embeddings, input.spans)
+
+        # leverage the external data regarding co-reference clusters to add up essential information that leads to
+        # a more informative, clear, and self-contained representation.
+        # Use graph neural network to produce a representation that is mindful of the co-reference clusters and
+        # beneficial for evaluating the correct preposition relations between NPs in the text.
+        x4 = self.graph_convolution(span_embeddings.squeeze(0), input.coreference_links.squeeze(0)).unsqueeze(0)
+
+        # Dynamic graph neural network is employed to learn the connections which map out the way the information is conveyed between the spans.
+        # The goal is to enrich the initial representation with valuable information that is shared among the spans to improve the predictive ability of the model.
+        x5 = self.dynamic_graph_convolution(span_embeddings)
+
+        # concatenate the information gain by the graph-based methods to the initial encoding to get a richer representation.
+        # span_embeddings dim:  [ BATCH_SIZE x NOF_SPANS x ENHANCED_SPAN_DIM ]
+        enhanced_span_embeddings = torch.concat((span_embeddings, x4, x5), dim=-1)
 
         # Feed each span into the anchor encoder/mlp to gain representations for the spans as an anchors
         # anchor_reps dim: [ BATCH_SIZE x NOF_SPANS x ANCHOR_REP ]
-        anchor_reps = self.anchor_encoder(span_embeddings)
+        anchor_reps = self.anchor_encoder(enhanced_span_embeddings)
 
         # Feed each span into the complement encoder/mlp to gain representations for the spans as complements
         # complement_reps dim = [ BATCH_SIZE x NOF_SPANS x COMPLEMENT_REP ]
-        complement_reps = self.complement_encoder(span_embeddings)
+        complement_reps = self.complement_encoder(enhanced_span_embeddings)
 
-        # Creating a large matrix that concatenates all permutations of anchor with complement
-        # permutations_mat dim : [ BATCH_SIZE x NOF_SPANS x NOF_SPANS x ANCHOR_REP + COMPLEMENT_REP ]
-        # permutations_spans dim : [ NOF_SPANS * NOF_SPANS x ANCHOR_REP + COMPLEMENT_REP ]
+        # Creating a large matrix that concatenates all permutations of anchor with complement along with their relative distance
+        # permutations_mat dim : [ BATCH_SIZE x NOF_SPANS x NOF_SPANS x ANCHOR_REP + COMPLEMENT_REP + RELATIVE_EMBEDDING_DIM ]
+        # permutations_spans dim : [ NOF_SPANS * NOF_SPANS x ANCHOR_REP + COMPLEMENT_REP + RELATIVE_EMBEDDING_DIM ]
         batch_size, nof_spans, features_dim = anchor_reps.shape
+        starts = input.spans[:, :, 1].squeeze(0)
+        spans_distance = starts.repeat(nof_spans) - starts.view(nof_spans, 1).repeat(1, nof_spans).view(-1)
+        spans_distance = torch.clamp(spans_distance, -1 * self.max_spans_distance, self.max_spans_distance) + self.max_spans_distance  # hyper max_spans_distance...
         permutations_mat = torch.cat([anchor_reps.repeat(1, nof_spans, 1),
-                                      complement_reps.repeat(1, 1, nof_spans).view(batch_size, -1, features_dim)], dim=-1)
-        permutations_spans = permutations_mat.view(-1, 2 * features_dim)
+                                      complement_reps.repeat(1, 1, nof_spans).view(batch_size, -1, features_dim),
+                                      self.distance_embeddings(spans_distance.unsqueeze(0))], dim=-1)
+        permutations_spans = permutations_mat.view(nof_spans * nof_spans, -1)
 
         # Invoke prediction model
         # to get probability for each label/preposition.
         # predicted_labels dim: [  NOF_SPANS * NOF_SPANS x NUM_LABELS ]
         # such that the number of labels is the number of valid prepositions
-        predicted_labels = self.prediction_model(permutations_spans).squeeze(0)
-        predictions = predicted_labels.argmax(dim=-1)
-        for label in predictions:
-            self.classes[label] = self.classes[label] + 1
+        logits = self.prediction_model(permutations_spans).squeeze(0)
 
-        if self.optimization_steps % 400 == 0:
+        # Print to log the predicted labels, used for debugging
+        if self.training and self.optimization_steps % 400 == 0:
             print("--predicted--")
-            print (predicted_labels.argmax(dim=-1))
+            print (logits.argmax(dim=-1))
             print ("--labels--")
             print (labels)
-            print ("--classes--")
-            print (self.classes)
-            self.classes = torch.zeros(26, dtype=torch.long)
+
+        # Test mode, returns the predicted prepositions for each NP pair.
+        if input.test_mode:
+            return logits.argmax(dim=-1)
+
+        # Eval mode, evaluate the metrics and print out the results.
+        if not self.training:
+            self.metrics_evaluation.evaluate_metrics(input.preposition_labels, logits)
 
         # Compute loss value which gains the probabilities
-        loss = self.loss(predicted_labels, input.preposition_labels)
+        if not self.training or random.random() > self.concrete_labels_rate:
+            loss = self.loss(logits, input.preposition_labels)
+        else:
+            logits = logits[input.concrete_idx][0]
+            loss = self.loss(logits, input.concrete_labels.squeeze(0))
         input.to("cpu")
 
         # Return loss and the logits (probabilities vectors)
-        return {"loss": loss, "logits": predicted_labels}
+        return {"loss": loss, "logits": logits}

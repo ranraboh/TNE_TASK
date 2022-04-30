@@ -1,7 +1,7 @@
 from typing import Dict, Optional, Any
 import torch
 import torch.nn as tnn
-from model.modules.activation_function import get_activation_module
+from model.enums.activation_function import get_activation_module
 
 
 class Multilayer_Classifier(tnn.Module):

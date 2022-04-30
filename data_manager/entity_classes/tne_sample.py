@@ -3,7 +3,7 @@ from data_manager.entity_classes.span_field import SpanField
 import torch
 
 class TNESample:
-    def __init__(self, id: str, tokens: List[str], spans: List[SpanField], links: torch.Tensor, prepositions_labels: torch.Tensor) -> None:
+    def __init__(self, id: str, tokens: List[str], spans: List[SpanField], links: torch.Tensor, prepositions_labels: torch.Tensor, coreference_links, test_mode=False) -> None:
         """
             DESCRIPTION: The method used to init the fields/information regarding a sample in dataset.
             ARGUMENTS:
@@ -28,6 +28,7 @@ class TNESample:
 
         # Indicate for each pair of noun phrases, whether they are linked or not.
         self.links = links
+        self.coreference_links = coreference_links
 
         # Determine the connecting preposition entity for each pair of noun phrases
         self.prepositions_labels = prepositions_labels
@@ -41,6 +42,12 @@ class TNESample:
 
         # Additional meta-data
         self.metadata = None
+        self.test_mode = test_mode
+
+        # Init concrete relation data which contains the labels for pair of NP span that has a
+        # concrete preposition relation between them and their corresponding index
+        if not self.test_mode:
+            self.init_concrete_relations()
 
     def get_spans_range(self, batch_idx) -> torch.Tensor:
         """
@@ -55,10 +62,18 @@ class TNESample:
             spans_range[i] = span.get_end_points(batch_idx)
         return spans_range
 
-    def adjust_spans(self, tokenizer):
-        #print ("tokens", self.tokens)
-        #for i, span in enumerate(self.spans.values()):
-        #    print(span, span.start_position, span.end_position)
+    def process_data(self, tokenizer):
+        """
+            The method process the data to fits to the model.
+            Add start and end tokens
+        """
+        span_start_token = "<span_start>" # extract from tokenizer
+        span_end_token = "<span_end>"
+        for i, span in enumerate(self.spans.values()):
+            span.adjust_end_points(span.start_position + 2 * i, span.end_position + 2 * (i + 1))
+            self.tokens.insert(span.start_position, span_start_token)
+            self.tokens.insert(span.end_position - 1, span_end_token)
+
         subwords_tokens = torch.zeros(len(self.tokens) + 1, dtype=torch.long)
         subwords_tokens[0] = 1
         for id, word in enumerate(self.tokens):
@@ -67,10 +82,17 @@ class TNESample:
         subwords_tokens = torch.cumsum(subwords_tokens, dim=0)
         for i, span in enumerate(self.spans.values()):
             span.adjust_end_points(subwords_tokens[span.start_position], subwords_tokens[span.end_position])
-        #print ("--------------------------------------------------------")
-        #for i, span in enumerate(self.spans.values()):
-        #    print(span, span.start_position, span.end_position)
-        #print ("subword", subwords_tokens)
+
+    def init_concrete_relations(self):
+        concrete_labels = []
+        concrete_idx = []
+        for idx, label in enumerate(self.prepositions_labels):
+            if label == 0:
+                continue
+            concrete_labels.append(label)
+            concrete_idx.append(idx)
+        self.concrete_labels = torch.LongTensor(concrete_labels)
+        self.concrete_idx = torch.LongTensor(concrete_idx)
 
     def __str__(self) -> str:
         """

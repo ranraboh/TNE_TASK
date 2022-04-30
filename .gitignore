@@ -127,3 +127,15 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Misc
+*.ini
+logs
+results
+old_results
+out
+tne_ran.err
+tne_ran.out
+tne_ran.slurm
+run.sh
+output.sh

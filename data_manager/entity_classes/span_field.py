@@ -1,4 +1,3 @@
-from typing import Tuple
 import torch
 
 class SpanField:
@@ -16,12 +15,19 @@ class SpanField:
         """
         # Init span fields
         self.id = id
+        self.coreference = None
         self.start_position = start_position
 
         # Adding 1 to the end tokens to account for the non-including nature of index selection
         self.end_position = end_position + 1
 
     def adjust_end_points(self, start_poistion, end_position):
+        """
+            DESCRIPTION: set/change the end points of the span.
+            ARGUMENTS:
+              - start_position: the position the span begins in the text.
+              - end_position: the position the span ends in the text.
+        """
         self.start_position = start_poistion
         self.end_position = end_position
 
